@@ -1,61 +1,43 @@
 use std::{ptr, time::Instant};
 
 use imgui::{FontConfig, FontSource};
-use imgui_winit_support::{HiDpiMode, WinitPlatform};
+use imgui_winit_support::{HiDpiMode, WinitPlatform, winit::{window::WindowBuilder, event::{Event, WindowEvent}, event_loop::{EventLoop, ControlFlow}, dpi::LogicalSize}};
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::{BOOL, HWND};
-use windows::Win32::Graphics::Direct3D9::{
-    Direct3DCreate9, IDirect3D9, IDirect3DDevice9, D3DADAPTER_DEFAULT,
-    D3DCREATE_SOFTWARE_VERTEXPROCESSING, D3DDEVTYPE_HAL, D3DFMT_R5G6B5, D3DMULTISAMPLE_NONE,
-    D3DPRESENT_INTERVAL_DEFAULT, D3DPRESENT_PARAMETERS, D3DPRESENT_RATE_DEFAULT,
-    D3DSWAPEFFECT_DISCARD, D3D_SDK_VERSION,
-};
-use windows::Win32::System::SystemServices::D3DCLEAR_TARGET;
-use winit::{
-    dpi::LogicalSize,
-    event::{Event, WindowEvent},
-    event_loop::EventLoop,
-    window::WindowBuilder,
-};
+use winapi::shared::{d3d9::*, d3d9caps::*, d3d9types::*, windef::HWND};
 
 const WINDOW_WIDTH: f64 = 760.0;
 const WINDOW_HEIGHT: f64 = 760.0;
 
-unsafe fn set_up_dx_context(hwnd: HWND) -> (IDirect3D9, IDirect3DDevice9) {
-    let d9_option = Direct3DCreate9(D3D_SDK_VERSION);
-    match d9_option {
-        Some(d9) => {
-            let mut present_params = D3DPRESENT_PARAMETERS {
-                BackBufferCount: 1,
-                MultiSampleType: D3DMULTISAMPLE_NONE,
-                MultiSampleQuality: 0,
-                SwapEffect: D3DSWAPEFFECT_DISCARD,
-                hDeviceWindow: hwnd,
-                Flags: 0,
-                FullScreen_RefreshRateInHz: D3DPRESENT_RATE_DEFAULT,
-                PresentationInterval: D3DPRESENT_INTERVAL_DEFAULT as u32,
-                BackBufferFormat: D3DFMT_R5G6B5,
-                EnableAutoDepthStencil: BOOL(0),
-                Windowed: BOOL(1),
-                BackBufferWidth: WINDOW_WIDTH as _,
-                BackBufferHeight: WINDOW_HEIGHT as _,
-                ..core::mem::zeroed()
-            };
-            let mut device: Option<IDirect3DDevice9> = None;
-            match d9.CreateDevice(
-                D3DADAPTER_DEFAULT,
-                D3DDEVTYPE_HAL,
-                hwnd,
-                D3DCREATE_SOFTWARE_VERTEXPROCESSING as u32,
-                &mut present_params,
-                &mut device,
-            ) {
-                Ok(_) => (d9, device.unwrap()),
-                _ => panic!("CreateDevice failed"),
-            }
-        },
-        None => panic!("Direct3DCreate9 failed"),
-    }
+unsafe fn set_up_dx_context(hwnd: HWND) -> (LPDIRECT3D9, LPDIRECT3DDEVICE9) {
+    let d9 = Direct3DCreate9(D3D_SDK_VERSION);
+    assert!(!d9.is_null(), "Direct3DCreate9 failed");
+    let mut present_params = D3DPRESENT_PARAMETERS {
+        BackBufferCount: 1,
+        MultiSampleType: D3DMULTISAMPLE_NONE,
+        MultiSampleQuality: 0,
+        SwapEffect: D3DSWAPEFFECT_DISCARD,
+        hDeviceWindow: hwnd,
+        Flags: 0,
+        FullScreen_RefreshRateInHz: D3DPRESENT_RATE_DEFAULT,
+        PresentationInterval: D3DPRESENT_INTERVAL_DEFAULT,
+        BackBufferFormat: D3DFMT_R5G6B5,
+        EnableAutoDepthStencil: 0,
+        Windowed: 1,
+        BackBufferWidth: WINDOW_WIDTH as _,
+        BackBufferHeight: WINDOW_HEIGHT as _,
+        ..core::mem::zeroed()
+    };
+    let mut device = ptr::null_mut();
+    let r = (*d9).CreateDevice(
+        D3DADAPTER_DEFAULT,
+        D3DDEVTYPE_HAL,
+        hwnd,
+        D3DCREATE_SOFTWARE_VERTEXPROCESSING,
+        &mut present_params,
+        &mut device,
+    );
+    assert!(r >= 0, "CreateDevice failed");
+    (d9, device)
 }
 
 fn main() {
@@ -67,11 +49,11 @@ fn main() {
         .build(&event_loop)
         .unwrap();
     let hwnd = if let RawWindowHandle::Windows(handle) = window.raw_window_handle() {
-        HWND(handle.hwnd as isize)
+        handle.hwnd
     } else {
         unreachable!()
     };
-    let (_d9, device) = unsafe { set_up_dx_context(hwnd) };
+    let (_d9, device) = unsafe { set_up_dx_context(hwnd as _) };
     let mut imgui = imgui::Context::create();
     imgui.set_ini_filename(None);
     let mut platform = WinitPlatform::init(&mut imgui);
@@ -84,8 +66,9 @@ fn main() {
     }]);
     imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
 
-    let mut renderer =
-        unsafe { imgui_dx9_renderer::Renderer::new(&mut imgui, device.clone()).unwrap() };
+    let mut renderer = unsafe {
+        imgui_dx9_renderer::Renderer::new(&mut imgui, wio::com::ComPtr::from_raw(device)).unwrap()
+    };
 
     let mut last_frame = Instant::now();
 
@@ -102,10 +85,8 @@ fn main() {
         },
         Event::RedrawRequested(_) => {
             unsafe {
-                device
-                    .Clear(0, ptr::null_mut(), D3DCLEAR_TARGET as u32, 0xFFAA_AAAA, 1.0, 0)
-                    .unwrap();
-                device.BeginScene().unwrap();
+                (*device).Clear(0, ptr::null_mut(), D3DCLEAR_TARGET, 0xFFAA_AAAA, 1.0, 0);
+                (*device).BeginScene();
             }
 
             let ui = imgui.new_frame();
@@ -116,18 +97,23 @@ fn main() {
                     ui.text("This...is...imgui-rs!");
                     ui.separator();
                     let mouse_pos = ui.io().mouse_pos;
-                    ui.text(&format!("Mouse Position: ({:.1},{:.1})", mouse_pos[0], mouse_pos[1]));
+                    ui.text(format!("Mouse Position: ({:.1},{:.1})", mouse_pos[0], mouse_pos[1]));
                 });
             ui.show_demo_window(&mut true);
             platform.prepare_render(ui, &window);
             renderer.render(imgui.render()).unwrap();
             unsafe {
-                device.EndScene().unwrap();
-                device.Present(ptr::null_mut(), ptr::null_mut(), None, ptr::null_mut()).unwrap();
+                (*device).EndScene();
+                (*device).Present(
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                );
             }
         },
         Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-            *control_flow = winit::event_loop::ControlFlow::Exit
+            *control_flow = ControlFlow::Exit
         },
         event => {
             platform.handle_event(imgui.io_mut(), &window, &event);
