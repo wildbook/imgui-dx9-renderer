@@ -13,8 +13,8 @@ use winapi::shared::d3d9::{
     IDirect3DTexture9, IDirect3DVertexBuffer9,
 };
 use winapi::shared::d3d9types::*;
-use winapi::shared::winerror::{DXGI_ERROR_INVALID_CALL, HRESULT, S_OK};
 use winapi::shared::windef::RECT;
+use winapi::shared::winerror::{DXGI_ERROR_INVALID_CALL, HRESULT, S_OK};
 use winapi::Interface;
 use wio::com::ComPtr;
 
@@ -100,7 +100,10 @@ impl Renderer {
     /// `device` must be a valid [`IDirect3DDevice9`] pointer.
     ///
     /// [`IDirect3DDevice9`]: https://docs.rs/winapi/0.3/x86_64-pc-windows-msvc/winapi/shared/d3d9/struct.IDirect3DDevice9.html
-    pub unsafe fn new_raw(im_ctx: &mut imgui::Context, device: *mut IDirect3DDevice9) -> Result<Self> {
+    pub unsafe fn new_raw(
+        im_ctx: &mut imgui::Context,
+        device: *mut IDirect3DDevice9,
+    ) -> Result<Self> {
         let device = ComPtr::from_raw(device);
         device.AddRef();
         Self::new(im_ctx, device)
@@ -273,7 +276,7 @@ impl Renderer {
             0,
             (vtx_count * mem::size_of::<CustomVertex>()) as u32,
             &mut vtx_dst as *mut _ as _,
-            D3DLOCK_DISCARD as u32,
+            D3DLOCK_DISCARD,
         );
 
         match hresult(ib.Lock(
@@ -319,12 +322,7 @@ impl Renderer {
         }
         vb.Unlock();
         ib.Unlock();
-        self.device.SetStreamSource(
-            0,
-            vb,
-            0,
-            mem::size_of::<CustomVertex>() as u32,
-        );
+        self.device.SetStreamSource(0, vb, 0, mem::size_of::<CustomVertex>() as u32);
         self.device.SetIndices(ib);
         self.device.SetFVF(D3DFVF_CUSTOMVERTEX);
         Ok(())
