@@ -131,6 +131,24 @@ impl Renderer {
     ///
     /// [`Ui`]: https://docs.rs/imgui/*/imgui/struct.Ui.html
     pub fn render(&mut self, draw_data: &DrawData) -> Result<()> {
+        self.render_optional_backup::<true>(draw_data)
+    }
+
+    /// Renders the given [`Ui`] with this renderer without backing up and
+    /// restoring the device's state.
+    ///
+    /// Should the [`DrawData`] contain an invalid texture index the renderer
+    /// will return `DXGI_ERROR_INVALID_CALL` and immediately stop rendering.
+    ///
+    /// [`Ui`]: https://docs.rs/imgui/*/imgui/struct.Ui.html
+    pub fn render_without_backup(&mut self, draw_data: &DrawData) -> Result<()> {
+        self.render_optional_backup::<false>(draw_data)
+    }
+
+    fn render_optional_backup<const STATE_BACKUP: bool>(
+        &mut self,
+        draw_data: &DrawData,
+    ) -> Result<()> {
         if draw_data.display_size[0] < 0.0 || draw_data.display_size[1] < 0.0 {
             return Ok(());
         }
@@ -144,7 +162,10 @@ impl Renderer {
                     Self::create_index_buffer(&self.device, draw_data.total_idx_count as usize)?;
             }
 
-            let _state_guard = StateBackup::backup(&self.device)?;
+            let _state_guard = match STATE_BACKUP {
+                true => Some(StateBackup::backup(&self.device)?),
+                false => None,
+            };
 
             self.set_render_state(draw_data)?;
             self.write_buffers(draw_data)?;
